@@ -14,7 +14,7 @@ This will create the following infrastructure:
 3. An EC2 instance in the private subnet.
 4. An AppStream instance in the private subnet.
 
-Note that NO resources are placed in the private subnet. Thus, nothing here is internet-accessible!
+Note that NO resources are placed in the public subnet. Thus, nothing here is internet-accessible!
 
 ### Using the AppStream instance:
 
