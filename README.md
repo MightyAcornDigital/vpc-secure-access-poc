@@ -25,6 +25,14 @@ Note that NO resources are placed in the private subnet. Thus, nothing here is i
 5. Once logged in, you can use the AppStream instance.
 6. You can see that the Postgres hostname is resolved, but the connection is refused.
 
+Pros:
+* No need to install anything on the client.
+* Strict controls on copy/paste and file transfer.
+
+Cons:
+* Yet another auth layer/user management spot.
+* Might need to roll our own images to get the software we want.
+
 ### Using the Jump instance:
 
 ```shell
@@ -42,4 +50,4 @@ Pros:
 
 Cons:
 * No copy/paste protection.
-* Can also be used to tunnel a connection, which would 
+* Can also be used to tunnel a connection, which could be considered a security risk.
