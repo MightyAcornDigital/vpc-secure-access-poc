@@ -1,80 +1,75 @@
-module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
+data "aws_caller_identity" "me" {}
 
-  name = "sandbox"
-  cidr = "10.0.0.0/16"
-
-  azs             = ["us-east-1a", "us-east-1b"]
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
-
-  enable_nat_gateway = true
-  single_nat_gateway = true
-  one_nat_gateway_per_az = false
-
-  tags = {
-    Terraform = "true"
-    Environment = "dev"
-  }
+variable "prefix" {
+  type = string
+  default = null
 }
-module "endpoints" {
-  source = "terraform-aws-modules/vpc/aws//modules/vpc-endpoints"
-
-  vpc_id             = module.vpc.vpc_id
-  create_security_group = true
-  security_group_rules = {
-    egress = {
-      type = "egress"
-      cidr_blocks = ["0.0.0.0/0"]
-      to_port   = 0
-      from_port = 0
-      protocol  = "-1"
-    }
-    ingress = {
-      type = "ingress"
-      to_port   = 0
-      from_port = 0
-      protocol  = "-1"
-      cidr_blocks = ["0.0.0.0/0"]
-    }
-  }
-  endpoints = {
-    appsync = {
-      service = "appstream.streaming"
-    }
-  }
+variable "role_arns" {
+  type = list(string)
 }
 
-resource "aws_security_group" "db" {
-  name_prefix = "demo-db"
-    vpc_id      = module.vpc.vpc_id
-    ingress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+resource "aws_sns_topic" "alerts" {
+  name = "assume-role-alerts"
+}
+data "aws_iam_policy_document" "alerts" {
+  // This is the default policy that allows the account to publish to the topic.
+  statement {
+    effect = "Allow"
+    principals {
+      type = "AWS"
+      identifiers = ["*"]
     }
+    actions = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values = [data.aws_caller_identity.me.account_id]
+    }
+  }
+  statement {
+    effect = "Allow"
+    principals {
+      type = "Service"
+      identifiers = ["events.amazonaws.com"]
+    }
+    actions = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn]
+  }
+}
+resource "aws_sns_topic_policy" "alerts" {
+  arn    = aws_sns_topic.alerts.arn
+  policy = data.aws_iam_policy_document.alerts.json
 }
 
-module "db" {
-  source = "terraform-aws-modules/rds/aws"
+data "aws_cloudwatch_event_bus" "default" {
+  name = "default"
+}
 
-  identifier = "demo"
+resource "aws_cloudwatch_event_rule" "assume_role" {
+  event_bus_name = data.aws_cloudwatch_event_bus.default.name
+  name = "assume-role-alerts"
+  description = "Provides notifications when certain roles are assumed."
+  state = "ENABLED"
+  event_pattern = jsonencode({
+    "detail": {
+      "eventName": ["AssumeRole", "AssumeRoleWithSAML", "AssumeRoleWithWebIdentity"],
+      "eventSource": ["sts.amazonaws.com"],
+      "requestParameters": {"roleArn": var.role_arns}
+    },
+    "detail-type": ["AWS API Call via CloudTrail"],
+    "source": ["aws.sts"]
+  })
+}
 
-  engine               = "postgres"
-  engine_version       = "14"
-  family               = "postgres14" # DB parameter group
-  major_engine_version = "14"         # DB option group
-  instance_class       = "db.t4g.micro"
-  allocated_storage    = 20
-
-  skip_final_snapshot     = true
-  deletion_protection     = false
-  backup_retention_period = 1
-  vpc_security_group_ids = [aws_security_group.db.id]
-  create_db_subnet_group = true
-  subnet_ids             = module.vpc.private_subnets
-  manage_master_user_password = false
-  username = "demo"
-  password = "Password1234"
+resource "aws_cloudwatch_event_target" "sns" {
+  arn  = aws_sns_topic.alerts.arn
+  rule = aws_cloudwatch_event_rule.assume_role.name
+  input_transformer {
+    input_paths = {
+      "role" = "$.detail.requestParameters.roleArn",
+      "user" = "$.detail.requestParameters.roleSessionName",
+    }
+    input_template = "\"Role <role> has been assumed by <user>\""
+  }
 }
